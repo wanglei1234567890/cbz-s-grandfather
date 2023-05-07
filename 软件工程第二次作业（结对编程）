@@ -1,0 +1,155 @@
+1.获取分页后的物理内存页数，计算总大小，空闲页数和被使用页数。
+int physical_mem(){
+int i, free=0; /* free表示空闲页的总数 */
+unsigned long addr; /*分配的物理内存页地址*/
+
+for(i=0 ; i<PAGING_PAGES ; i++)
+{
+		if (0 == mem_map[i])
+		{
+			free++;
+		}
+}
+printk("Page Count : %d\n", PAGING_PAGES);
+//计算内存，kernel默认物理页大小为4K
+printk("Memory Count : %d * 4096 = %d Byte\n\n", PAGING_PAGES, PAGING_PAGES * 4096); 
+printk("Free Page Count : %d\n", free);
+printk("Used Page Count : %d\n", PAGING_PAGES - free);
+
+//申请一个空闲页后的内存情况
+printk("****************After Allocate One Page****************\n");
+addr = get_free_page();
+if(!addr)
+{
+		printk("get free page error!\n");
+		return 1;
+}
+printk("Allocate One Page : 0x%X\n", addr );
+free = 0;
+for(i=0 ; i<PAGING_PAGES ; i++)
+{
+		if (0 == mem_map[i]) //为0即mem_map[i]为空闲页
+		{
+			free++;
+		}
+}
+printk("Free Page Count : %d\n", free);
+printk("Used Page Count : %d\n", PAGING_PAGES - free);
+
+//释放掉申请的内存页后的内存情况
+printk("****************After Free One Page****************\n");
+free_page(addr);
+printk("Free One Page : 0x%X\n", addr );
+free = 0;
+for(i=0 ; i<PAGING_PAGES ; i++)
+{
+		if (0 == mem_map[i])
+		{
+			free++;
+		}
+}
+printk("Free Page Count : %d\n", free);
+printk("Used Page Count : %d\n", PAGING_PAGES - free);
+
+return 0;
+}
+2.调用系统函数dump_physical_mem
+Vi main.c
+#define __LIBRARY__
+#include <unistd.h>
+#define __NR_dump_physical_mem 87
+_syscall0( int, dump_physical_mem )
+int main( int argc, char** argv ){
+dump_physical_mem();
+return 0;
+}
+3.输出页目录和页表信息函数
+
+int sys_table_mapping(){
+unsigned long index_of_dir,  index_of_table;
+unsigned long entry;
+unsigned long page_table_base;
+unsigned long page_dir_base = 0;
+__asm("cli");
+calc_mem(); // 显示内存空闲页面数。
+// 首先打印输出页目录信息
+fprintk(1,"Page Directory(PFN:0x0 | LA:0x00000000)\n");
+// 第一层循环，遍历页目录中的所有 PDE
+for(index_of_dir = 0; index_of_dir < 1024; index_of_dir++){
+entry = ((unsigned long*)page_dir_base)[index_of_dir];
+if(!(entry & 1)) /* 跳过无效的 PDE */
+continue;
+// 输出 PDE 信息
+fprintk(1,"\tPDE: 0x%X -> Page Table(PFN:0x%X | LA:0x%08X)\n", index_of_dir,  entry >> 12, 0xFFFFF000 & entry);
+/* 页目录项的高20位即为页表的物理地址，页表的物理地址即为页表的逻辑地址 */
+page_table_base = 0xFFFFF000 & entry;
+/* 第二层循环，遍历页表中的所有 PTE */
+for(index_of_table = 0; index_of_table < 1024; index_of_table++){
+entry = ((unsigned long*)page_table_base)[index_of_table];
+if(!(entry & 1)) /* 跳过无效的 PTE */
+continue; 
+// 输出 PTE 信息
+fprintk(1,"\t\tPTE: 0x%X -> Physical Page(PFN:0x%X | LA:0x%08X)\n", index_of_table, 
+entry >> 12, (index_of_dir << 22) | (index_of_table << 12));
+}
+ }
+ __asm("sti");
+return 0;
+}
+
+头文件及静态声明
+int fprintk( int fd, const char * fmt, ... )
+{
+va_list args;
+int i;
+struct file * file;
+struct m_inode * inode;
+va_start (args, fmt); 
+   i = vsprintf (logbuf, fmt, args);
+   va_end (args);
+   
+   if( fd<3 )
+   {
+   __asm__ ("push %%fs\n\t" 
+    "push %%ds\n\t"
+    "pop %%fs\n\t" 
+   "pushl %0\n\t" 
+    "pushl $_logbuf\n\t" 
+    "pushl %1\n\t" 
+    "call _sys_write\n\t" 
+    "addl $8,%%esp\n\t" 
+    "popl %0\n\t" 
+    "pop %%fs" 
+::"r" (i),"r" (fd):"ax",  "dx");
+   }
+   else
+   {
+   if( !( file=task[0]->filp[fd] ) )
+   return 0;
+   inode=file->f_inode;
+   __asm__ ("push %%fs\n\t" 
+    "push %%ds\n\t"
+    "pop %%fs\n\t" 
+   "pushl %0\n\t" 
+    "pushl $_logbuf\n\t" 
+    "pushl %1\n\t" 
+    "pushl %2\n\t" 
+    "call _file_write\n\t" 
+    "addl $12,%%esp\n\t" 
+    "popl %0\n\t" 
+    "pop %%fs" 
+::"r" (i), "r" (file), "r" (inode)   ); 
+   }
+   return i;// 返回字符串长度
+}
+
+4.调用系统函数table_mapping
+Meminfo.c
+#define __LIBRARY__
+#include <unistd.h>
+#define __NR_table_mapping 88
+_syscall0( int, table_mapping )
+int main( int argc, char** argv ){
+table_mapping();
+return 0;
+}
